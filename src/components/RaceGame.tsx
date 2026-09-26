@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { useAppData } from '@/lib/data';
 import { Button } from '@/lib/ui/Button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/lib/ui/Card';
 import { Input } from '@/lib/ui/Input';
@@ -8,6 +7,8 @@ import { Badge } from '@/lib/ui/Badge';
 import { Alert, AlertTitle, AlertDescription } from '@/lib/ui/Alert';
 import { Flag, Gauge, Timer, RotateCcw, Home, Trophy } from 'lucide-react';
 import type { RaceSelection } from '@/App';
+import { submitResult } from '@/lib/races';
+import type { Session } from '@supabase/supabase-js';
 
 const TOTAL_LAPS = 3;
 const TRACK_COLORS: Record<string, string> = {
@@ -39,7 +40,15 @@ function buildCheckpoints(w: number, h: number) {
   return pts;
 }
 
-export function RaceGame({ selection, onExit }: { selection: RaceSelection; onExit: () => void }) {
+export function RaceGame({
+  selection,
+  onExit,
+  session,
+}: {
+  selection: RaceSelection;
+  onExit: () => void;
+  session: Session | null;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [phase, setPhase] = useState<Phase>('countdown');
   const [countdown, setCountdown] = useState(3);
@@ -47,22 +56,15 @@ export function RaceGame({ selection, onExit }: { selection: RaceSelection; onEx
   const [speedDisplay, setSpeedDisplay] = useState(0);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [finalTimeMs, setFinalTimeMs] = useState<number | null>(null);
-  const [playerName, setPlayerName] = useState('');
+  const [playerName, setPlayerName] = useState(
+    session?.user?.email ? session.user.email.split('@')[0] : ''
+  );
   const [submitted, setSubmitted] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [resetTick, setResetTick] = useState(0);
 
   const qc = useQueryClient();
-
-  // Keeps the shared leaderboard mock/cache warm so submitting after a race feels live.
-  useAppData<any[]>({
-    key: 'race_results',
-    mock: [],
-    fetchLive: async () => {
-      throw new Error('not wired yet');
-    },
-  });
 
   const stateRef = useRef({
     keys: {} as Record<string, boolean>,
@@ -242,9 +244,13 @@ export function RaceGame({ selection, onExit }: { selection: RaceSelection; onEx
     setSubmitting(true);
     setSubmitError(null);
     try {
-      // Phase 2 wires this to a real Supabase insert. For now we optimistically
-      // reflect the submission in the UI so the flow is fully testable.
-      await new Promise((resolve) => resolve(undefined));
+      await submitResult({
+        player_name: playerName.trim(),
+        track: selection.track,
+        car: selection.car,
+        lap_time_ms: finalTimeMs,
+        laps: TOTAL_LAPS,
+      });
       setSubmitted(true);
       qc.invalidateQueries({ queryKey: ['race_results'] });
     } catch (e) {
@@ -252,7 +258,7 @@ export function RaceGame({ selection, onExit }: { selection: RaceSelection; onEx
     } finally {
       setSubmitting(false);
     }
-  }, [playerName, finalTimeMs, qc]);
+  }, [playerName, finalTimeMs, qc, selection]);
 
   const formatMs = (ms: number) => {
     const m = Math.floor(ms / 60000);
@@ -269,7 +275,6 @@ export function RaceGame({ selection, onExit }: { selection: RaceSelection; onEx
     setFinalTimeMs(null);
     setSubmitted(false);
     setSubmitError(null);
-    setPlayerName('');
     stateRef.current = {
       keys: {},
       car: { x: 0, y: 0, angle: -Math.PI / 2, speed: 0 },
@@ -344,7 +349,9 @@ export function RaceGame({ selection, onExit }: { selection: RaceSelection; onEx
                 </div>
                 {!submitted ? (
                   <div className="space-y-2">
-                    <label className="text-small text-muted-foreground">Enter your name to post this time</label>
+                    <label className="text-small text-muted-foreground">
+                      {session ? 'Confirm the name to post this time' : 'Enter your name to post this time'}
+                    </label>
                     <Input
                       placeholder="Player name"
                       value={playerName}
